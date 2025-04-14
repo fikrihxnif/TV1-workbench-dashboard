@@ -155,7 +155,7 @@ def closed_alerts_weekly():
 
 @app.route('/')
 def dashboard():
-    return render_template('dashboard_scroll3.html')
+    return render_template('dashboard.html')
 
 @app.route('/data')
 def fetch_data():
