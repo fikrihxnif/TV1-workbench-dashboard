@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trend Vision One Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* General Styling */
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 30px;
+            margin: 20px 0;
+            color: #444;
+        }
+
+        .container {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            width: 90%;
+            margin: 0 auto;
+            max-width: 1920px;
+        }
+
+        .section {
+            flex: 1;
+            background: transparent;
+            padding: 20px;
+            height: 250px;
+        }
+
+        .chart-container {
+            height: 100%;
+        }
+
+        canvas {
+            max-height: 100%;
+            max-width: 100%;
+        }
+
+        .section h2 {
+            font-size: 16px;
+            margin-bottom: 10px;
+            text-align: center;
+            color: #0078d7;
+        }
+
+        .alerts {
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .no-alert {
+            text-align: center;
+            color: grey;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+
+        .alert {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            gap: 2px;
+            border-bottom: 1px solid #f2f2f2;
+            font-size: 14px;
+        }
+
+        .row {
+            display: flex;
+            width: 100%;
+        }
+
+        .alerts-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            width: 90%;
+            margin: 20px auto;
+            max-width: 1920px;
+        }
+
+        .alerts-section {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: transparent;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            padding: 15px;
+            height: 240px;
+            width: 80%;
+            overflow: hidden;
+        }
+
+        .alerts-section h2 {
+            font-size: 16px;
+            margin-bottom: 10px;
+            text-align: center;
+            color: #0078d7;
+        }
+
+        .alert:last-child {
+            border-bottom: none;
+        }
+
+        .workbench-id {
+            flex: 2;
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .workbench-id a {
+            color: #0078d7;
+            text-decoration: none;
+        }
+
+        .workbench-id a:hover {
+            text-decoration: underline;
+        }
+
+        .model {
+            flex: 3;
+            display: block;
+            white-space: normal;
+            padding-left: 10px;
+        }
+
+        .severity {
+            flex: 1;
+            text-align: center;
+        }
+
+        .elapsed-time {
+            flex: 1.5;
+            text-align: center;
+            color: grey;
+        }
+
+        /* Severity Colors */
+        .critical {
+            color: purple;
+        }
+        .high {
+            color: red;
+        }
+        .medium {
+            color: orange;
+        }
+        .low {
+            color: green;
+        }
+
+        .chart-container {
+            margin: 20px auto;
+            width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Trend Vision One Workbench Alerts</h1>
+
+    <div class="container">
+        <!-- New Alerts Section -->
+        <div class="alerts-section">
+            <h2>New Alerts</h2>
+            <div class="alerts" id="new-alerts"></div>
+        </div>
+
+        <!-- In Progress Alerts Section -->
+        <div class="alerts-section">
+            <h2>In Progress Alerts</h2>
+            <div class="alerts" id="inprogress-alerts"></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Bar Chart Section -->
+        <div class="section">
+            <h2>Closed Alerts Weekly</h2>
+            <div class="chart-container">
+                <canvas id="closed-alerts-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Pie Chart Section -->
+        <div class="section">
+            <h2>Alerts by Model</h2>
+            <div class="chart-container">
+                <canvas id="alerts-model-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let barChartInstance; // Keep track of the bar chart instance
+let pieChartInstance; // Keep track of the pie chart instance
+
+async function fetchData() {
+    try {
+        console.log('Fetching data...');
+        const response = await fetch('/data');
+        const data = await response.json();
+
+        // Helper function to truncate Workbench ID
+        const truncateWorkbenchID = (id) => id.slice(-14);
+
+        // Helper function to calculate elapsed time for sorting
+        const calculateSortValue = (elapsedTime) => {
+                const parts = elapsedTime.split(' ');
+                const value = parseInt(parts[0], 10);
+                const unit = parts[1];
+
+                if (unit.startsWith('minute')) return value; // Lowest priority (minutes)
+                if (unit.startsWith('hour')) return value * 60; // Convert hours to minutes
+                if (unit.startsWith('day')) return value * 1440; // Convert days to minutes
+                return Infinity; // Default for unknown cases
+            };
+            
+        // Sort alerts by severity and then by time elapsed (Z-A, oldest first)
+        const sortedAlerts = (alerts) => {
+                return alerts.sort((a, b) => {
+                    const severityOrder = { high: 3, medium: 2, low: 1 };
+                    const severityA = severityOrder[a.severity.toLowerCase()] || 0;
+                    const severityB = severityOrder[b.severity.toLowerCase()] || 0;
+
+                    if (severityA !== severityB) {
+                        return severityB - severityA; // Sort by severity
+                    }
+
+                    const timeA = calculateSortValue(a.elapsedTime);
+                    const timeB = calculateSortValue(b.elapsedTime);
+                    return timeB - timeA; // Sort by elapsed time (Z-A)
+                });
+            };
+
+        const [weeklyResponse, modelResponse] = await Promise.all([
+            fetch('/closed-alerts-weekly'),
+            fetch('/alerts-model')
+        ]);
+
+        const weeklyData = await weeklyResponse.json();
+        const modelData = await modelResponse.json();
+
+        // Destroy existing bar chart if it exists
+        if (barChartInstance) {
+            barChartInstance.destroy();
+        }
+        // Render bar chart
+        barChartInstance = renderBarChart(weeklyData);
+
+        // Destroy existing pie chart if it exists
+        if (pieChartInstance) {
+            pieChartInstance.destroy();
+        }
+        // Render pie chart
+        pieChartInstance = renderPieChart(modelData);
+
+        // Update alerts
+        const capitalizeSeverity = (severity) => {
+            if (!severity) return "Unknown";
+            return severity.charAt(0).toUpperCase() + severity.slice(1).toLowerCase();
+        };
+
+        const newAlertsContainer = document.getElementById('new-alerts');
+        const sortedNewAlerts = sortedAlerts(data.new_alerts);
+        if (data.new_alerts.length === 0) {
+                newAlertsContainer.innerHTML = `
+                    <div class="no-alert">No New Alert</div>
+                `;
+            } else {
+        newAlertsContainer.innerHTML = sortedNewAlerts.map(alert => `
+            <div class="alert">
+                <div class="row">
+                    <div class="workbench-id">
+                                <a href="${alert.workbenchLink}" target="_blank">${truncateWorkbenchID(alert.workbench_id)}</a>
+                            </div>
+                    <div class="model">${alert.model}</div>
+                    <div class="severity ${alert.severity.toLowerCase()}">${capitalizeSeverity(alert.severity)}</div>
+                    <div class="elapsed-time">${alert.elapsedTime}</div>
+                </div> 
+            </div>
+        `).join('');
+            }
+
+        const inprogressAlertsContainer = document.getElementById('inprogress-alerts');
+        const sortedInprogressAlerts = sortedAlerts(data.inprogress_alerts);
+        if (data.inprogress_alerts.length === 0) {
+                inprogressAlertsContainer.innerHTML = `
+                    <div class="no-alert">No In-Progress Alert</div>
+                `;
+            } else {
+        inprogressAlertsContainer.innerHTML = sortedInprogressAlerts.map(alert => `
+            <div class="alert">
+                <div class="row">
+                    <div class="workbench-id">
+                                <a href="${alert.workbenchLink}" target="_blank">${truncateWorkbenchID(alert.workbench_id)}</a>
+                            </div>
+                    <div class="model">${alert.model}</div>
+                    <div class="severity ${alert.severity.toLowerCase()}">${capitalizeSeverity(alert.severity)}</div>
+                    <div class="elapsed-time">${alert.elapsedTime}</div>
+                </div> 
+            </div>
+        `).join('');
+            }
+
+    } catch (error) {
+        console.error('Error fetching data:', error);
+    }
+}
+
+function renderBarChart(data) {
+    const ctx = document.getElementById('closed-alerts-chart').getContext('2d');
+    return new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['True Positive', 'Benign True Positive', 'False Positive', 'Noteworthy', 'Others'],
+            datasets: [{
+                label: 'Closed Alerts Weekly',
+                data: [
+                    data['True Positive'] || 0,
+                    data['Benign True Positive'] || 0,
+                    data['False Positive'] || 0,
+                    data['Noteworthy'] || 0,
+                    data['Others'] || 0
+                ],
+                backgroundColor: ['#4caf50', '#2196f3', '#ff9800', '#9c27b0', '#607d8b']
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top'
+                }
+            }
+        }
+    });
+}
+
+function renderPieChart(data) {
+    const ctx = document.getElementById('alerts-model-chart').getContext('2d');
+    return new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: Object.keys(data),
+            datasets: [{
+                data: Object.values(data),
+                backgroundColor: [
+                    '#4caf50', '#2196f3', '#ff9800', '#9c27b0', '#607d8b', '#ff5722', '#8bc34a'
+                ]
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'right'
+                }
+            }
+        }
+    });
+}
+
+// Fetch data initially and set interval for periodic updates
+fetchData();
+setInterval(fetchData, 60000);
+
+
+        // Auto-scroll functionality
+        function autoScroll(containerId) {
+            const container = document.getElementById(containerId);
+            let scrollAmount = 0;
+            let direction = 1;
+
+            setInterval(() => {
+                const maxScroll = container.scrollHeight - container.clientHeight;
+                if (scrollAmount >= maxScroll) direction = -1;
+                if (scrollAmount <= 0) direction = 1;
+                scrollAmount += direction * 1;
+                container.scrollTop = scrollAmount;
+            }, 50);
+        }
+
+        autoScroll('new-alerts');
+        autoScroll('inprogress-alerts');
+    </script>
+</body>
+</html>
